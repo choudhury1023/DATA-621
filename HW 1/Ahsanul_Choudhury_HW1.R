@@ -1,0 +1,164 @@
+```{r}
+if (!require('psych')) install.packages('psych')
+if (!require('knitr')) install.packages('knitr')
+if (!require('ggplot2')) install.packages('ggplot2')
+if (!require('RColorBrewer')) install.packages('RColorBrewer')
+if (!require('gridExtra')) install.packages('gridExtra')
+if (!require('corrplot')) install.packages('corrplot')
+# Load data
+training_data <- read.csv("https://raw.githubusercontent.com/choudhury1023/DATA-621/master/HW%201/moneyball-training-data.csv")
+eval_data <- read.csv("https://raw.githubusercontent.com/choudhury1023/DATA-621/master/HW%201/moneyball-evaluation-data.csv")
+
+# Data exploration
+
+dim(training_data)
+
+missing_train <- colSums(is.na(training_data))
+total_missing <- sum(missing_train)
+total_missing
+
+missing_train <- round(missing_train/dim(training_data)[1]*100,2)
+df_missing <- data.frame(missing_train)
+df_missing <- cbind(variables = rownames(df_missing), df_missing)
+df_missing_table <- df_missing
+colnames(df_missing_table) <- c("Varibles", "Percent of Data Missing")
+rownames(df_missing_table) <- NULL
+
+kable(df_missing_table)
+
+
+# Missing data plot
+
+ggplot(df_missing, aes(x = reorder(variables, -missing_train), y = missing_train, fill=factor(missing_train))) + 
+  scale_fill_brewer(palette="Reds") +
+  geom_bar(stat = "identity") + coord_flip() + 
+  geom_text(aes(label = missing_train), hjust= -0.1, size=3.5) +
+  xlab("Pecent of Data Missing") + ylab("Variables") +
+  ggtitle("Percent of Data Missing by Each Variable") +
+  theme(legend.position="bottom")
+
+
+
+# Data Summary
+
+des_train <- describe(training_data)
+knitr::kable(des_train)
+
+
+# Boxplot
+
+ggplot(stack(training_data), aes(x = ind, y = values)) + geom_boxplot() + coord_flip()
+
+
+# Correlation plot
+
+correlation <- round(apply(training_data,2, function(col)cor(col, training_data$TARGET_WINS)),2)
+df_correlation <- data.frame(correlation)
+df_correlation <- cbind(variables = rownames(df_correlation), df_correlation)
+rownames(df_correlation) <- NULL
+kable(df_correlation)
+
+plots <- list() # empty list for plots
+
+for(i in 3:17){
+  plots[[i-2]] <- 
+    ggplot(training_data,
+           aes_string(colnames(training_data)[i],colnames(training_data)[2])) + 
+    geom_point() + stat_smooth(method="lm")
+}
+
+source("http://peterhaschke.com/Code/multiplot.R")
+
+
+multiplot(plotlist = plots, cols = 4)
+
+######
+
+## Data prep
+# Remove INDEX, TEAM_BATTING_HBP
+
+training <- subset(training_data, select = -c(INDEX, TEAM_BATTING_HBP) )
+
+# Median imputation
+
+cs <- round(median(training$TEAM_BASERUN_CS, na.rm=T))
+dp <- round(median(training$TEAM_FIELDING_DP, na.rm=T))
+sb <- round(median(training$TEAM_BASERUN_SB, na.rm=T))
+bso <- round(median(training$TEAM_BATTING_SO, na.rm=T))
+pso <- round(median(training$TEAM_PITCHING_SO, na.rm=T))
+
+
+training[['TEAM_BASERUN_CS']][is.na(training[['TEAM_BASERUN_CS']])] <- cs
+training[['TEAM_FIELDING_DP']][is.na(training[['TEAM_FIELDING_DP']])] <- dp
+training[['TEAM_BASERUN_SB']][is.na(training[['TEAM_BASERUN_SB']])] <- sb
+training[['TEAM_BATTING_SO']][is.na(training[['TEAM_BATTING_SO']])] <- bso
+training[['TEAM_PITCHING_SO']][is.na(training[['TEAM_PITCHING_SO']])] <- pso
+
+
+# Correlation after imputation
+
+correlation1 <- round(apply(training,2, function(col)cor(col, training$TARGET_WINS)),2)
+df_correlation1 <- data.frame(correlation1)
+df_correlation1 <- cbind(variables = rownames(df_correlation1), df_correlation1)
+rownames(df_correlation1) <- NULL
+kable(df_correlation1)
+
+
+# correlation matrix plot
+
+cm <- cor(training)
+corrplot(cm, type = "upper", order = "hclust", 
+         tl.col = "black", tl.srt = 45)
+
+
+#######
+
+
+## Build Model
+# All variables
+model1 <- lm(data = training, TARGET_WINS ~ .)
+summary(model1)
+
+
+# Drop TEAM_PITCHING_BB
+model2 <- lm(TARGET_WINS ~ TEAM_BATTING_H + TEAM_BATTING_2B + TEAM_BATTING_3B + TEAM_BATTING_HR + TEAM_BATTING_BB + TEAM_BATTING_SO
+             + TEAM_BASERUN_SB + TEAM_BASERUN_CS + TEAM_PITCHING_H + TEAM_PITCHING_HR + TEAM_PITCHING_SO + TEAM_FIELDING_E + TEAM_FIELDING_DP, data = training)
+summary(model2)
+
+# Drop TEAM_BASERUN_CS and TEAM_PITCHING_HR
+
+model3 <- lm(TARGET_WINS ~ TEAM_BATTING_H + TEAM_BATTING_2B + TEAM_BATTING_3B + TEAM_BATTING_HR + TEAM_BATTING_BB + TEAM_BATTING_SO
+             + TEAM_BASERUN_SB + TEAM_PITCHING_H + TEAM_PITCHING_SO + TEAM_FIELDING_E + TEAM_FIELDING_DP, data = training)
+summary(model3)
+
+
+# Simple Model
+model4 <- lm(TARGET_WINS ~  TEAM_BATTING_H + TEAM_BASERUN_SB + TEAM_FIELDING_DP + TEAM_FIELDING_E, training)
+summary(model4)
+
+
+#######
+
+## Select Model
+
+# Selected model plots
+
+hist(model4$residuals)
+
+plot(model4$residuals~training$TARGET_WINS)
+abline(h=0,lty=3)
+
+qqnorm(model4$residuals)
+qqline(model4$residuals)
+
+pred <- predict(model4,eval_data)
+summary(pred)
+
+pred <- data.frame(pred)
+write.csv(pred, "mb_predictions.csv")
+
+p_train <- ggplot(training, aes(TARGET_WINS)) + geom_histogram() + ggtitle("Training Win") 
+p_pred <- ggplot(pred, aes(pred)) + geom_histogram() + ggtitle("Predicted Win")
+
+grid.arrange(p_train, p_pred, ncol=2)
+```
