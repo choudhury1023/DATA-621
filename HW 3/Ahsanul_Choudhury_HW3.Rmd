@@ -1,0 +1,247 @@
+---
+title: "DATA 621 HW3"
+author: "Ahsanul Choudhury"
+date: "April 15, 2018"
+output:
+    pdf_document: default
+---
+\newpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = 'figures/',
+                      echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+\tableofcontents
+\newpage
+
+# Introduction
+
+The purpose of this analysis is to build a logistic regression model that will predict whether a particular neighborhood of a major city will be at risk for high crime levels.
+
+
+```{r, message=F, warning=F, echo=FALSE}
+if (!require('psych')) (install.packages('psych'))
+if (!require('ggplot2')) (install.packages('ggplot2'))
+if (!require('gridExtra')) (install.packages('gridExtra'))
+if (!require('PerformanceAnalytics')) (install.packages('PerformanceAnalytics'))
+if (!require('pander')) (install.packages('pander'))
+if (!require('pROC')) (install.packages('pROC'))
+if (!require('caret')) (install.packages('caret'))
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+train <- read.csv('crime-training-data_modified.csv', header=T)
+test <- read.csv('crime-evaluation-data_modified.csv', header=T)
+```
+
+\newpage
+
+Appendix
+
+# Data Exploration
+
+Let's look at the data first; there are `r dim(train)[1]` observations and `r dim(train)[2]` variables, following table contains the names of the variable and a brief description of each variable:
+
+```{r, message=F, warning=F, echo=FALSE}
+variables <- c(variable.names(train))
+description <- c("proportion of residential land zoned for large lots (over 25000 square feet)",
+                 "proportion of non-retail business acres per suburb", 
+                 "a dummy var. for whether the suburb borders the Charles River (1) or not (0)",
+                 "nitrogen oxides concentration (parts per 10 million)", "average number of rooms per dwelling",
+                 "proportion of owner-occupied units built prior to 1940", 
+                 "weighted mean of distances to five Boston employment centers", " index of accessibility to radial highways",
+                 "full-value property-tax rate per $10,000", "pupil-teacher ratio by town",
+                 "lower status of the population (percent)", "median value of owner-occupied homes in $1000s",
+                 "whether the crime rate is above the median crime rate (1) or not (0)")
+knitr::kable(data.frame("Variables"=variables, "Description"=description))
+```
+
+The first 12 variables are the predictor variables and the last variable, *target*, is the response variable. Also note the response variable is a binary variable.
+
+Now, lets checkout a brief descriptive summary of our variables:
+
+```{r, message=F, warning=F, echo=FALSE}
+summary_stat <- describe(train[,c(1:12)])[,c(3:5,8,9,11:13)]
+knitr::kable(summary_stat)
+```
+
+We will now plot a histogram and boxplot to see the distribution of the predictor variables and look for outliers:
+
+```{r, message=F, warning=F, echo=FALSE}
+zn_hist <- ggplot(train, aes(zn)) + geom_histogram(fill="orange")
+indus_hist <- ggplot(train, aes(indus)) + geom_histogram(fill="orange")
+nox_hist <- ggplot(train, aes(nox)) + geom_histogram(fill="orange")
+rm_hist <- ggplot(train, aes(rm)) + geom_histogram(fill="orange")
+age_hist <- ggplot(train, aes(age)) + geom_histogram(fill="orange")
+dis_hist <- ggplot(train, aes(dis)) + geom_histogram(fill="orange")
+rad_hist <- ggplot(train, aes(rad)) + geom_histogram(fill="orange")
+tax_hist <- ggplot(train, aes(tax)) + geom_histogram(fill="orange")
+ptratio_hist <- ggplot(train, aes(ptratio)) + geom_histogram(fill="orange")
+lstat_hist <- ggplot(train, aes(lstat)) + geom_histogram(fill="orange")
+medv_hist <- ggplot(train, aes(medv)) + geom_histogram(fill="orange")
+
+zn_bx <- ggplot(train, aes(factor(target), zn)) + geom_boxplot(fill="orange")
+indus_bx <- ggplot(train, aes(factor(target), indus)) + geom_boxplot(fill="orange")
+nox_bx <- ggplot(train, aes(factor(target), nox)) + geom_boxplot(fill="orange")
+rm_bx<- ggplot(train, aes(factor(target), rm)) + geom_boxplot(fill="orange")
+age_bx <- ggplot(train, aes(factor(target), age)) + geom_boxplot(fill="orange")
+dis_bx <- ggplot(train, aes(factor(target), dis)) + geom_boxplot(fill="orange")
+rad_bx <- ggplot(train, aes(factor(target), rad)) + geom_boxplot(fill="orange")
+tax_bx <- ggplot(train, aes(factor(target), tax)) + geom_boxplot(fill="orange")
+ptratio_bx <- ggplot(train, aes(factor(target), ptratio)) + geom_boxplot(fill="orange")
+lstat_bx <- ggplot(train, aes(factor(target), lstat)) + geom_boxplot(fill="orange")
+medv_bx <- ggplot(train, aes(factor(target), medv)) + geom_boxplot(fill="orange")
+
+grid.arrange(zn_hist,zn_bx,indus_hist,indus_bx,nox_hist,nox_bx,ncol=2,nrow=3)
+grid.arrange(rm_hist,rm_bx,age_hist,age_bx,dis_hist,dis_bx,ncol=2,nrow=3)
+grid.arrange(rad_hist,rad_bx,tax_hist,tax_bx,ptratio_hist,ptratio_bx,ncol=2,nrow=3)
+grid.arrange(lstat_hist,lstat_bx,medv_hist,medv_bx,ncol=2,nrow=2)
+```
+
+
+From the boxplots we can see variables *zn, rm, dis, lstat,* and *medv* contains outlier which can influence on our models.
+
+```{r, message=F, warning=F, echo=FALSE}
+table(train$target)
+```
+
+We will now look at correlation matrix to get an understanding of relationships between variables:
+
+```{r, message=F, warning=F, echo=FALSE}
+chart.Correlation(train)
+```
+
+We can see *tax* and *rad* has a very high correlation which raises the concern of multicollinearity concern in our dataset. 
+
+# Data Preparation
+
+To prepare our data, first, we will look for any missing value in our dataset and from the following table we can see there is no missing data in any of our variables.
+
+```{r, message=F, warning=F, echo=FALSE}
+missing_train <- data.frame(colSums(is.na(train)))
+colnames(missing_train) <- c("Missing Data")
+knitr::kable(missing_train)
+```
+
+As one of the condition of logistic regression is to have very little or no multicollinearity among the variables. As we have seen earlier *tax* and *rad* has a very high correlation, we will create a new variable putting *tax* in a bucket and dichotomize using median split.
+
+```{r, message=F, warning=F, echo=FALSE}
+train_new <- train
+train_new$tax <- ifelse(train_new$tax >= median(train_new$tax,na.rm=T),1,0)
+```
+
+# Build Models
+
+**Model 1**: Our first model uses the original *tax* and all the variables in the dataset.
+
+```{r, message=F, warning=F, echo=FALSE}
+data1 <- train
+data2 <- train_new
+model1 <- glm(target ~.,family=binomial(link='logit'),data = data1)
+train_df <- train
+train_df$predicted_model1 <- predict(model1, train_df, type = 'response')
+train_df$target_model1 <- ifelse(train_df$predicted_model1 > 0.5, 1, 0)
+
+pander(summary(model1))
+```
+
+
+**Model 2**: Our 2nd model is a *AIC based Backward Stepwise Model* and uses transformed *tax*.
+
+```{r, message=F, warning=F, echo=FALSE}
+model_new <- glm(target ~.,family=binomial(link='logit'),data = data2)
+model2 <- step(model_new, direction = "backward", trace = 1)
+train_df1 <- train_new
+train_df1$predicted_model2 <- predict(model2, train_df1, type = 'response')
+train_df1$target_model2 <- ifelse(train_df1$predicted_model2 > 0.5, 1, 0)
+
+pander(summary(model2))
+```
+
+
+**Model 3**: Our 3rd model is a *AIC based Forward Stepwise Model* and uses transformed *tax*
+
+```{r, message=F, warning=F, echo=FALSE}
+model3 <- step(model_new, direction = "forward", trace = 1)
+train_df1$predicted_model3 <- predict(model3, train_df1, type = 'response')
+train_df1$target_model3 <- ifelse(train_df1$predicted_model3 > 0.5, 1, 0)
+
+pander(summary(model3))
+
+```
+
+
+# Model Selection
+
+**ROC Curve**
+
+```{r, message=F, warning=F, echo=FALSE}
+model1_roc <- roc(factor(target) ~ predicted_model1, data=train_df)
+
+plot_roc <- plot(model1_roc, col="red", main = "Model 1 ROC")
+cm1 <-pander(confusionMatrix(train_df$target, train_df$target_model1, positive = "1")$table)
+
+auc1 <- auc(model1_roc)
+
+model2_roc <- roc(factor(target) ~ predicted_model2, data=train_df1)
+
+plot_roc <- plot(model2_roc, col="red", main = "Model 2 ROC")
+cm2 <- pander(confusionMatrix(train_df1$target, train_df1$target_model2, positive = "1")$table)
+
+auc2 <- auc(model2_roc)
+
+model3_roc <- roc(factor(target) ~ predicted_model3, data=train_df1)
+
+plot_roc <- plot(model3_roc, col="red", main = "Model 3 ROC")
+cm3 <- pander(confusionMatrix(train_df1$target, train_df1$target_model3, positive = "1")$table)
+
+auc3 <- auc(model3_roc)
+
+```
+
+
+**Area Under Curve**
+
+```{r, message=F, warning=F, echo=FALSE}
+auc_m <- c(auc1, auc2, auc3)
+mod<- c("Model 1", "Model 2", "Model 3")
+df_auc <- data.frame("Model" = mod, "Area Under Curve" = auc_m)
+
+knitr::kable(df_auc)
+```
+
+**Confusion Matrix**
+
+```{r, message=F, warning=F, echo=FALSE}
+print("Model1")
+cm1
+print("Model2")
+cm2
+print("Model3")
+cm3
+```
+
+Based on our ROC curve, Area under curve, confusion matrix and AIC number we have selected *Model 2*.
+
+# Predictions
+
+```{r, message=F, warning=F, echo=FALSE}
+test$tax_bkt <- ifelse(test$tax >= median(test$tax,na.rm=T),1,0)
+predict_test <- predict(model1, newdata=test, type='response')
+glm_pred_test = ifelse(predict_test > 0.5, 1, 0)
+test$target <- glm_pred_test
+table(test$target)
+write.csv(eval, 'result.csv')
+
+```
+
+\newpage
+
+## Appendix
+
+
+
+## Reference:
+
+http://rstudio-pubs-static.s3.amazonaws.com/2899_a9129debf6bd47d2a0501de9c0dc583d.html
