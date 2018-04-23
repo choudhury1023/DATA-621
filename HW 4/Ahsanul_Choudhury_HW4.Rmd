@@ -1,0 +1,516 @@
+---
+title: "DATA 621 HW4"
+author: "Ahsanul Choudhury"
+date: "April 20, 2018"
+output:
+    pdf_document: default
+---
+
+\newpage
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = 'figures/',
+                      echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+\tableofcontents
+\newpage
+
+
+# Introduction
+
+The purpose of this analysis is to explore, analyze a data set containing approximately 8000
+records representing a customer at an auto insurance company and build multiple linear regression and binary logistic regression models on the training data to predict the probability that a person will crash their car and also the amount of money it will cost if the person does crash their car.
+
+```{r, message=F, warning=F, echo=FALSE}
+if (!require('kableExtra')) (install.packages('kableExtra'))
+if (!require('pander')) (install.packages('pander'))
+if (!require('ggplot2')) (install.packages('ggplot2'))
+if (!require('gridExtra')) (install.packages('gridExtra'))
+if (!require('psych')) (install.packages('psych'))
+if (!require('PerformanceAnalytics')) (install.packages('PerformanceAnalytics'))
+if (!require('pROC')) (install.packages('pROC'))
+if (!require('caret')) (install.packages('caret'))
+```
+
+
+# Data Exploration
+
+```{r, message=F, warning=F, echo=FALSE}
+train <- read.csv('insurance_training_data.csv', header=T)
+test <- read.csv('insurance-evaluation-data.csv', header=T)
+```
+
+Let's look at the data first; there are `r dim(train)[1]` observations and `r dim(train)[2]` variables. The first variable is the index variable and will not be used for this exercise. There are 23 predictor variables and 2 response variables. The two response variable are *TARGET_FLAG* and *TARGET_AMT*. *TARGET_FLAG* is a binary categorical variable which indicates if a customer has been in an accidentn or not and *TARGET_AMT* is a numerical variable indicating the cost of a crash that a customer was involved in. Following table contains the names of the variables in the dataset, a brief defination of each variable and the theoretical effect of each perdictor variable on the target variable:
+
+```{r, message=F, warning=F, echo=FALSE}
+variables <- c(variable.names(train[2:26]))
+defination <- c('Was Car in a crash? 1=YES 0=NO', 'If car was in a crash, what was the cost',  '# Driving Children', 'Age of Driver', '# Children at Home', 'Years on Job', 'Income', 'Single Parent', 'Home Value', 'Marital Status', 'Gender', 'Max Education Level', 'Job Category', 'Distance to Work', 'Vehicle Use', 'Value of Vehicle', 'Time in Force', 'Type of Car', 'A Red Car ', 'Total Claims (Past 5 Years)', '# Claims (Past 5 Years)', 'License Revoked (Past 7 Years)', 'Motor Vehicle Record Points', 'Vehicle Age', 'Home/Work Area')
+theoretical_effect <- c('None', 'None', 'When teenagers drive your car, you are more likely to get into crashes', 'Very young people tend to be risky. Maybe very old people also.', 'Unknown effect', 'People who stay at a job for a long time are usually more safe', 'In theory, rich people tend to get into fewer crashes', 'Unknown effect', 'In theory, home owners tend to drive more responsibly', 'In theory, married people drive more safely', 'Urban legend says that women have less crashes then men. Is that true?', 'Unknown effect, but in theory more educated people tend to drive more safely', 'In theory, white collar jobs tend to be safer', 'Long drives to work usually suggest greater risk', 'Commercial vehicles are driven more, so might increase probability of collision', 'Unknown effect on probability of collision, but probably effect the payout if there is a crash', 'People who have been customers for a long time are usually more safe.', 'Unknown effect on probability of collision, but probably effect the payout if there is a crash', 'Urban legend says that red cars (especially red sports cars) are more risky. Is that true?', 'If your total payout over the past five years was high, this suggests future payouts will be high', 'The more claims you filed in the past, the more you are likely to file in the future', 'If your license was revoked in the past 7 years, you probably are a more risky driver.', 'If you get lots of traffic tickets, you tend to get into more crashes', 'Unknown effect on probability of collision, but probably effect the payout if there is a crash', 'Unknown')
+knitr::kable(data.frame("Variables"=variables, "Defination"=defination, "Theoretical Effect"=theoretical_effect), format="latex", booktabs=TRUE) %>%
+               kable_styling(full_width = FALSE, latex_options = "striped") %>%
+               column_spec(3, width = "20em")
+```
+
+\newpage
+
+Now, let's check the class of each variable in the dataset:
+
+```{r, message=F, warning=F, echo=FALSE}
+var_class <- data.frame(Class = rep(NA, ncol(train) - 1), Levels = rep(NA, ncol(train) - 1), stringsAsFactors = FALSE, check.names = FALSE, row.names = names(train)[-1])
+for(i in 2:ncol(train)) {
+  var_class[i - 1, 1] <- class(train[, i])
+  var_class[i - 1, 2] <- ifelse(length(levels(train[, i])) == 0, '-', length(levels(train[, i])))
+}
+pander(var_class)
+```
+
+Financial information like *INCOME, HOME_VAL, BLUEBOOK* and *OLDCLAIM* are classed as factor and contains "dollar sign ($)" and  "comma (,)" which we will need to address. *EDUCATION* has 5 dummy variables,  *CAR_TYPE* has 6 dummy variables and *JOB* has 9 dummy variables.
+
+The following table contains some top level summary statistics of the variables in the dataset:
+
+```{r, message=F, warning=F, echo=FALSE}
+summary <- describe(train[,c(2:26)])[,c(3:5,8,9,11:13)]
+knitr::kable(summary)
+```
+
+From the summary table we can see the minimum for *CAR_AGE* is showing as -3 which we can safely assume as a mistake.
+
+```{r, message=F, warning=F, echo=FALSE}
+# Remove all $ signs and commas
+
+train$INCOME <- gsub(",","",train$INCOME)
+train$INCOME <- as.numeric(gsub("[\\$,]", "",train$INCOME))
+train$HOME_VAL <- gsub(",","",train$HOME_VAL)
+train$HOME_VAL <- as.numeric(gsub("[\\$,]", "",train$HOME_VAL))
+train$BLUEBOOK <- gsub(",","",train$BLUEBOOK)
+train$BLUEBOOK <- as.numeric(gsub("[\\$,]", "",train$BLUEBOOK))
+train$OLDCLAIM <- gsub(",","",train$OLDCLAIM)
+train$OLDCLAIM <- as.numeric(gsub("[\\$,]", "",train$OLDCLAIM))
+
+test$INCOME <- gsub(",","",test$INCOME)
+test$INCOME <- as.numeric(gsub("[\\$,]", "",test$INCOME))
+test$HOME_VAL <- gsub(",","",test$HOME_VAL)
+test$HOME_VAL <- as.numeric(gsub("[\\$,]", "",test$HOME_VAL))
+test$BLUEBOOK <- gsub(",","",test$BLUEBOOK)
+test$BLUEBOOK <- as.numeric(gsub("[\\$,]", "",test$BLUEBOOK))
+test$OLDCLAIM <- gsub(",","",test$OLDCLAIM)
+test$OLDCLAIM <- as.numeric(gsub("[\\$,]", "",test$OLDCLAIM))
+
+chart.Correlation(train[,-c(1,2,3,9,11,12,13,14,16,19,20,23,26)])
+```
+
+From the correlation chart we can conclude that there is no big issue of collinearity amon the variables.
+  
+
+```{r, message=F, warning=F, echo=FALSE}
+tf_hist <- ggplot(train, aes(INCOME)) + geom_histogram(fill="orange")
+hv_hist <- ggplot(train, aes(HOME_VAL)) + geom_histogram(fill="orange")
+bb_hist <- ggplot(train, aes(BLUEBOOK)) + geom_histogram(fill="orange")
+old_hist <- ggplot(train, aes(OLDCLAIM)) + geom_histogram(fill="orange")
+
+tf_bx <- ggplot(train, aes(factor(TARGET_FLAG), INCOME)) + geom_boxplot(fill="orange")
+hv_bx <- ggplot(train, aes(factor(TARGET_FLAG), HOME_VAL)) + geom_boxplot(fill="orange")
+bb_bx <- ggplot(train, aes(factor(TARGET_FLAG), BLUEBOOK)) + geom_boxplot(fill="orange")
+old_bx<- ggplot(train, aes(factor(TARGET_FLAG), OLDCLAIM)) + geom_boxplot(fill="orange")
+
+
+grid.arrange(tf_hist,tf_bx,hv_hist,hv_bx,ncol=2,nrow=2)
+grid.arrange(bb_hist,bb_bx,old_hist,old_bx,ncol=2,nrow=2)
+```
+
+*INCOME, HOME_VAL, BLUEBOOK* and *OLDCLAIM* are heavily skewed, *HOME_VALUE* and *OLDCLAIM* expected to be skewed as my people are not home owners and some people never made claims. Log transformation of some of these variables may be helpful.
+
+
+\newpage
+
+# Data Preparation
+
+**Transform Data and Create New Variables**
+
+Based on our observations on the previous section we will make the following changes to our train dataset and the same changes will also be made to the target dataset. 
+
+-   We have removed "dollar sign ($)" and "comma (,) from *INCOME, HOME_VAL, BLUEBOOK* and *OLDCLAIM*.
+
+
+-   We will assume the negative entries in *CAR_AGE* are mistakes and will convert them to positive.
+
+```{r, message=F, warning=F, echo=FALSE}
+# Convert negative values in CAR_AGE to positive
+train$CAR_AGE <- abs(train$CAR_AGE)
+```
+
+-   *Education* has following `r length(unique(train$EDUCATION))` levels, we will split it up in in these levels and we will have 1 for the the person's highest education level and 0 for the others.
+
+```{r, message=F, warning=F, echo=FALSE}
+train$EDUCATION <- as.character(train$EDUCATION)
+edu <- unique(train$EDUCATION)
+knitr::kable(edu, booktabs = T, escape = F,
+col.names = "Education Lavels")
+
+train$phd <- train$EDUCATION
+train$phd <- ifelse(train$phd == "PhD", 1, 0)
+train$masters <- train$EDUCATION
+train$masters <- ifelse(train$masters == "Masters", 1, 0)
+train$bachelors <- train$EDUCATION
+train$bachelors <- ifelse(train$bachelors == "Bachelors", 1, 0)
+train$hs <- train$EDUCATION
+train$hs <- ifelse(train$hs == "z_High School", 1, 0)
+train$below_hs <- train$EDUCATION
+train$below_hs <- ifelse(train$below_hs == "<High School", 1, 0)
+
+test$EDUCATION <- as.character(test$EDUCATION)
+
+test$phd <- test$EDUCATION
+test$phd <- ifelse(test$phd == "PhD", 1, 0)
+test$masters <- test$EDUCATION
+test$masters <- ifelse(test$masters == "Masters", 1, 0)
+test$bachelors <- test$EDUCATION
+test$bachelors <- ifelse(test$bachelors == "Bachelors", 1, 0)
+test$hs <- test$EDUCATION
+test$hs <- ifelse(test$hs == "z_High School", 1, 0)
+test$below_hs <- test$EDUCATION
+test$below_hs <- ifelse(test$below_hs == "<High School", 1, 0)
+```
+
+-   For missing entries in *Job* we will input "Unknown" as a category.
+
+```{r, message=F, warning=F, echo=FALSE}
+train$JOB <- as.character(train$JOB)
+train$JOB[train$JOB == ""] <- "Unknown"
+
+test$JOB <- as.character(test$JOB)
+test$JOB[test$JOB == ""] <- "Unknown"
+```
+
+
+-   With "Unknown" there will be `r length(unique(train$JOB))` different categories of *JOB*, the following table shows the categories. We will split it up in these categories and have 1 for the category that matches the persons job and 0 for all the other categories.
+
+```{r, message=F, warning=F, echo=FALSE}
+job <- unique(train$JOB)
+knitr::kable(job, booktabs = T, escape = F,
+col.names = "Job Types")
+
+train$prof <- train$JOB
+train$prof <- ifelse(train$prof == "Professional", 1, 0)
+train$bc <- train$JOB
+train$bc <- ifelse(train$bc == "z_Blue Collar", 1, 0)
+train$cle <- train$JOB
+train$cle <- ifelse(train$cle == "Clerical", 1, 0)
+train$doc <- train$JOB
+train$doc <- ifelse(train$doc == "Doctor", 1, 0)
+train$law <- train$JOB
+train$law <- ifelse(train$law == "Lawyer", 1, 0)
+train$mgr <- train$JOB
+train$mgr <- ifelse(train$cle == "Manager", 1, 0)
+train$unknown <- train$JOB
+train$unknown <- ifelse(train$unknown == "Unknown", 1, 0)
+train$hm <- train$JOB
+train$hm <- ifelse(train$hm == "Home Maker", 1, 0)
+train$student <- train$JOB
+train$student <- ifelse(train$student == "Student", 1, 0)
+
+test$prof <- test$JOB
+test$prof <- ifelse(test$prof == "Professional", 1, 0)
+test$bc <- test$JOB
+test$bc <- ifelse(test$bc == "z_Blue Collar", 1, 0)
+test$cle <- test$JOB
+test$cle <- ifelse(test$cle == "Clerical", 1, 0)
+test$doc <- test$JOB
+test$doc <- ifelse(test$doc == "Doctor", 1, 0)
+test$law <- test$JOB
+test$law <- ifelse(test$law == "Lawyer", 1, 0)
+test$mgr <- test$JOB
+test$mgr <- ifelse(test$cle == "Manager", 1, 0)
+test$unknown <- test$JOB
+test$unknown <- ifelse(test$unknown == "Unknown", 1, 0)
+test$hm <- test$JOB
+test$hm <- ifelse(test$hm == "Home Maker", 1, 0)
+test$student <- test$JOB
+test$student <- ifelse(test$student == "Student", 1, 0)
+```
+
+-   There are `r length(unique(train$CAR_TYPE))` types of cars in *CAR_TYPE*. The following table shows the different types, we will split it up in these different types and enter 1 for the types that matches the car type and 0 for the rest.
+
+```{r, message=F, warning=F, echo=FALSE}
+typ <- unique(train$CAR_TYPE)
+knitr::kable(typ, booktabs = T, escape = F,
+col.names = "Type of Cars")
+train$m_van <- train$CAR_TYPE
+train$m_van <- ifelse(train$m_van == "Minivan", 1, 0)
+train$suv <- train$CAR_TYPE
+train$suv <- ifelse(train$suv == "z_SUV", 1, 0)
+train$sp_car <- train$CAR_TYPE
+train$sp_car <- ifelse(train$sp_car == "Sports Car", 1, 0)
+train$van <- train$CAR_TYPE
+train$van <- ifelse(train$van == "Van", 1, 0)
+train$p_trk <- train$CAR_TYPE
+train$p_trk <- ifelse(train$p_trk == "Panel Truck", 1, 0)
+train$pickup <- train$CAR_TYPE
+train$pickup <- ifelse(train$pickup == "Pickup", 1, 0)
+
+train = subset(train, select = -c(INDEX, EDUCATION, JOB, CAR_TYPE))
+
+
+test$m_van <- test$CAR_TYPE
+test$m_van <- ifelse(test$m_van == "Minivan", 1, 0)
+test$suv <- test$CAR_TYPE
+test$suv <- ifelse(test$suv == "z_SUV", 1, 0)
+test$sp_car <- test$CAR_TYPE
+test$sp_car <- ifelse(test$sp_car == "Sports Car", 1, 0)
+test$van <- test$CAR_TYPE
+test$van <- ifelse(test$van == "Van", 1, 0)
+test$p_trk <- test$CAR_TYPE
+test$p_trk <- ifelse(test$p_trk == "Panel Truck", 1, 0)
+test$pickup <- test$CAR_TYPE
+test$pickup <- ifelse(test$pickup == "Pickup", 1, 0)
+
+test = subset(test, select = -c(INDEX, EDUCATION, JOB, CAR_TYPE))
+```
+
+-   For *PARENT1, MSTATUS, RED_CAR* and *REVOKED* we will will replace "yes" with 1 and "no" with 0.
+
+-   For *SEX* will input 1 for "M" and 0 for "z_F".
+
+-   For *CAR_USE* we will replace "Commercial" with 1 and "Private" with 0.
+
+-   For *URBANICITY* we will replace "Highly Urban/ Urban" with 1 and "z_Highly Rural/ Rural" with 0.
+
+
+```{r, message=F, warning=F, echo=FALSE}
+train$PARENT1 <- ifelse(train$PARENT1=="Yes", 1, 0)
+train$MSTATUS <- ifelse(train$MSTATUS=="Yes", 1, 0)
+train$RED_CAR <- ifelse(train$RED_CAR=="yes", 1, 0)
+train$REVOKED <- ifelse(train$REVOKED=="Yes", 1, 0)
+train$SEX <- ifelse(train$SEX=="M", 1, 0)
+train$CAR_USE <- ifelse(train$CAR_USE=="Commercial", 1, 0)
+train$URBANICITY <- ifelse(train$URBANICITY == "Highly Urban/ Urban", 1, 0)
+
+test$PARENT1 <- ifelse(test$PARENT1=="Yes", 1, 0)
+test$MSTATUS <- ifelse(test$MSTATUS=="Yes", 1, 0)
+test$RED_CAR <- ifelse(test$RED_CAR=="yes", 1, 0)
+test$REVOKED <- ifelse(test$REVOKED=="Yes", 1, 0)
+test$SEX <- ifelse(test$SEX=="M", 1, 0)
+test$CAR_USE <- ifelse(test$CAR_USE=="Commercial", 1, 0)
+test$URBANICITY <- ifelse(test$URBANICITY == "Highly Urban/ Urban", 1, 0)
+```
+
+
+**Missing Data Handling**
+
+The dataset still has the following number of missing entries:
+
+```{r, message=F, warning=F, echo=FALSE}
+missing_train <- data.frame(colSums(is.na(train)))
+colnames(missing_train) <- c("Missing Data")
+knitr::kable(missing_train)
+```
+
+-   Since there are only 6 missing entris for *AGE* we will completely remove those from out dataset.
+
+```{r, message=F, warning=F, echo=FALSE}
+train <- train[complete.cases(train$AGE),]
+head(train)
+```
+
+-   *YOJ* looks nearly normally distributed we will use mean imputation and for *INCOME, HOME_VAL* and *CAR_AGE* will use median imputation as they are right skewed.
+
+```{r, message=F, warning=F, echo=FALSE}
+train$YOJ[is.na(train$YOJ)] <- mean(train$YOJ, na.rm = TRUE)
+train$INCOME[is.na(train$INCOME)] <- median(train$INCOME, na.rm = TRUE)
+train$HOME_VAL[is.na(train$HOME_VAL)] <- median(train$HOME_VAL, na.rm = TRUE)
+train$CAR_AGE[is.na(train$CAR_AGE)] <- median(train$CAR_AGE, na.rm = TRUE)
+```
+
+-   Finally we created a new train dataset with log transformed value for *INCOME* and *BLUEBOOK*
+
+```{r, message=F, warning=F, echo=FALSE}
+train_new <- train
+train_new$INCOME <- log(train_new$INCOME)
+train_new$INCOME[is.na(train_new$INCOME)] <- mean(!is.na(train_new$INCOME))
+train_new$INCOME <- (train_new$INCOME)^.5
+
+train_new$BLUEBOOK <- log(train_new$BLUEBOOK)
+
+
+
+test_new <- test
+test_new$INCOME <- log(test_new$INCOME)
+test_new$INCOME[is.na(test_new$INCOME)] <- mean(!is.na(test_new$INCOME))
+test_new$INCOME <- (test_new$INCOME)^.5
+test_new$BLUEBOOK <- log10(test_new$BLUEBOOK)
+```
+
+***
+
+
+\newpage
+
+# Build Models
+
+## TARGET_FLAG
+
+**MODEL 1**
+
+Our model 1 uses all variable and the original data.
+
+```{r, message=F, warning=F, echo=FALSE}
+data1 <- train[,-c(2)]
+data2 <- train_new[,-c(2)]
+model1 <- glm(TARGET_FLAG ~.,family=binomial(link='logit'),data = data1)
+train_df <- train
+train_df$predicted_model1 <- predict(model1, train_df, type = 'response')
+train_df$target_model1 <- ifelse(train_df$predicted_model1 > 0.5, 1, 0)
+
+pander(summary(model1))
+
+```
+
+
+**MODEL 2**
+
+For model2 we will go with the log normalized data but again we will use all the variables.
+
+```{r, message=F, warning=F, echo=FALSE}
+model2 <- glm(TARGET_FLAG ~.,family=binomial(link='logit'),data = data2)
+train_df1 <- train_new
+train_df1$predicted_model2 <- predict(model2, train_df1, type = 'response')
+train_df1$target_model2 <- ifelse(train_df1$predicted_model2 > 0.5, 1, 0)
+
+pander(summary(model2))
+
+```
+
+
+
+**MODEL 3** 
+
+For Model3 we will use the log nomarlized data with backward stepwise method.
+  
+```{r, message=F, warning=F, echo=FALSE}
+model3 <- step(model2, direction = "backward", trace = FALSE)
+train_df3 <- train_new
+train_df3$predicted_model3 <- predict(model3, train_df3, type = 'response')
+train_df3$target_model3 <- ifelse(train_df3$predicted_model3 > 0.5, 1, 0)
+
+pander(summary(model3))
+
+```
+
+## TARGET_AMT
+
+**MODEL 4**
+
+Our first model (model4) for *TARGET_AMT* is a lm model using original data.
+
+```{r, message=F, warning=F, echo=FALSE}
+train_new1<- train[train$TARGET_FLAG==1,-c(1)]
+data3 <- train_new1
+model4 <- lm(TARGET_AMT ~.,data = data3)
+
+pander(summary(model4))
+
+```
+
+**MODEL 5**
+
+The second model (model5) for *TARGET_AMT* is also a lm model but using the log modified data.
+
+
+```{r, message=F, warning=F, echo=FALSE}
+train_new2<- train_new[train_new$TARGET_FLAG==1,-c(1)]
+train_new2<-
+data4 <- train_new2
+model5 <- lm(TARGET_AMT ~.,data = data4)
+
+pander(summary(model5))
+
+```
+
+
+# Model Selection
+
+##TARGET_FLAG
+
+ROC curves and confusion matrix:
+
+```{r, message=F, warning=F, echo=FALSE}
+model1_roc <- roc(factor(TARGET_FLAG) ~ predicted_model1, data=train_df)
+plot_roc <- plot(model1_roc, col="red", main = "Model 1 ROC")
+cm1 <-pander(confusionMatrix(train_df$target, train_df$target_model1, positive = "1")$table)
+cm1
+auc1 <- auc(model1_roc)
+auc1
+
+model2_roc <- roc(factor(TARGET_FLAG) ~ predicted_model2, data=train_df1)
+plot_roc <- plot(model2_roc, col="red", main = "Model 2 ROC")
+cm2 <-pander(confusionMatrix(train_df1$target, train_df1$target_model2, positive = "1")$table)
+cm2
+auc2 <- auc(model2_roc)
+
+
+
+model3_roc <- roc(factor(TARGET_FLAG) ~ predicted_model3, data=train_df3)
+plot_roc <- plot(model3_roc, col="red", main = "Model 3 ROC")
+cm3 <-pander(confusionMatrix(train_df3$target, train_df3$target_model3, positive = "1")$table)
+cm3
+auc3 <- auc(model3_roc)
+
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+auc_all <- c(auc1, auc2, auc3)
+aic_all <- c(AIC(model1), AIC(model2), AIC(model3))
+auc_names <- c("Model1", "Model2", "Model3")
+auc_df <- data.frame( "MODEL"=auc_names,"AUC"= auc_all, "AIC"=aic_all)
+knitr::kable(auc_df)
+```
+
+From the area under curve (AUC) and akaike information criterion (AIC) numbers we can see model one has the best area under curve number with 0.8132840 but the highest AIC with 7367.288. AIC is a better indicator of relative quality of statistical model, the lower the AIC number the better. For *TARGET_FLAG* we will go with model3 which has the lowest AIC number
+
+
+## TARGET_AMT
+
+Residual plots:
+
+```{r, message=F, warning=F, echo=FALSE}
+par(mfrow = c(2,2))
+p1<- qqnorm(model4$residuals)
+p2 <- qqline(model4$residuals)
+p3 <-plot(model4$residuals ~ data3$TARGET_AMT,
+     xlab='',
+     ylab='Residuals',
+     main='Residual Plot of Model 4')
+abline(h=0,lty=3)
+p4 <- hist(model4$residuals)
+```
+
+
+```{r, message=F, warning=F, echo=FALSE}
+par(mfrow = c(2,2))
+p5<- qqnorm(model5$residuals)
+p6 <- qqline(model5$residuals)
+data4 <- na.omit(data4)
+p7 <-plot(model5$residuals ~ data4$TARGET_AMT,
+     xlab='',
+     ylab='Residuals',
+     main='Residual Plot of Model 4')
+abline(h=0,lty=3)
+p8 <- hist(model5$residuals)
+```
+
+For *TARGET_AMT* first if we take a lool at the summary statistics model4 has an $r^2$ value of 0.03055 and model5 has 0.03296. The values are not that promising and the difference is minimum. Now if we look at the residuals and the fit in the plot, both model show obivous trends (data is not completely random), heavily skewed to the right and mostly centered arund zero. All this tells us a different model than a linear model would be a better choice, for our exercise we will pick model5.
+
+# Predictions
+
+```{r, message=F, warning=F, echo=FALSE}
+mypred <- predict(model3, test_new, type='response')
+test_new$TARGET_FLAG <- ifelse(mypred  >= 0.5, 1, 0)
+  
+mypred2 <- exp(predict(model5, test_new))  
+test_new$TARGET_AMT <- mypred2
+
+write.csv(test_new, 'HW4_pred.csv', row.names = FALSE)
+```
