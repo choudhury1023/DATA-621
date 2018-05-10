@@ -1,0 +1,246 @@
+---
+title: "DATA 621 HW5"
+author: "Ahsanul Choudhury"
+date: "May 6, 2018"
+output:
+    pdf_document: default
+header-includes:
+  - \usepackage{booktabs}
+  - \usepackage{longtable}
+  - \usepackage{array}
+  - \usepackage{multirow}
+  - \usepackage[table]{xcolor}
+  - \usepackage{wrapfig}
+  - \usepackage{float}
+  - \usepackage{colortbl}
+  - \usepackage{pdflscape}
+  - \usepackage{tabu}
+  - \usepackage{threeparttable}
+  - \usepackage[normalem]{ulem}
+---
+\newpage
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = 'figures/',
+                      echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+\tableofcontents
+\newpage
+
+# Introduction
+
+The purpose of this excercise is to explore, analyze and model a data set containing information on approximately 12,000 commercially available wines. The variables are mostly related to the chemical properties of the wine being sold. The response variable is the number of sample cases of wine that were purchased by wine distribution companies after sampling a wine. These cases would be used to provide tasting samples to restaurants and wine stores around the United States. The more sample cases purchased, the more likely is a wine to be sold at a high end restaurant. A large wine manufacturer is studying the data in order to predict the number of wine cases ordered based upon the wine characteristics. If the wine manufacturer can predict the number of cases, then that manufacturer will be able to adjust their wine offering to maximize sales.
+
+Our objective is to build a count regression model to predict the number of cases of wine that will be sold given certain properties of the wine.
+
+```{r, message=F, warning=F, echo=FALSE}
+train <- read.csv('wine-training-data.csv', header=T)
+test <- read.csv('wine-evaluation-data.csv', header=T)
+
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+options(kableExtra.latex.load_packages = FALSE)
+if (!require('knitr')) (install.packages('knitr'))
+if (!require('kableExtra')) (install.packages('kableExtra'))
+options(knitr.table.format = "latex")
+if (!require('Amelia')) (install.packages('Amelia'))
+if (!require('DataExplorer')) (install.packages('DataExplorer'))
+if (!require('reshape')) (install.packages('reshape'))
+if (!require('ggplot2')) (install.packages('ggplot2'))
+if (!require('mice')) (install.packages('mice'))
+if (!require('dplyr')) (install.packages('dplyr'))
+if (!require('MASS')) (install.packages('MASS'))
+if (!require('pscl')) (install.packages('pscl'))
+```
+
+# Data Exploration
+
+
+Let's look at the data first; there are `r dim(train)[1]` observations and `r dim(train)[2]` variables, following table contains the names of the variable and a brief description of each variable:
+
+```{r, message=F, warning=F, echo=FALSE}
+variables <- c(variable.names(train))
+description <- c("Identification Variable", "Number of Cases Purchased", "Fixed Acidity of Wine", 
+                 "Volatile Acid content of wine", "Citric Acid Content", "Residual Sugar of wine",
+                 "Chloride content of wine", "Sulfur Dioxide content of wine", "Total Sulfur Dioxide of Wine",
+                 "Density of Wine", "pH of wine", "Sulfate content of wine", "Alcohol Content",
+                 "Marketing Score indicating the appeal of label design for consumers. High numbers suggest customers like the label design. Negative numbers suggest customes don't like the design.",
+                 "Proprietary method of testing total acidity of wine by using a weighted average",
+                 "Wine rating by a team of experts. 4 Stars = Excellent, 1 Star = Poor")
+kable(data.frame("Variables"=variables, "Description"=description)) %>%
+  kable_styling(full_width = F) %>%
+  column_spec(2, width = "30em")
+```
+
+There are a large numbers of NA values in the data set, the following table shows the the NA values in each of the variables.
+
+```{r, message=F, warning=F, echo=FALSE}
+train <- train[,-c(1)]
+test <- test[,-c(1)]
+missing_train <- data.frame(colSums(is.na(train)))
+colnames(missing_train) <- c("Missing Data")
+kable(missing_train)
+missmap(train, col=c("darkgreen", "lightgreen"), legend=FALSE)
+```
+
+In the *Missingness Map* we do not see any pattern in the dataset for the missing values, **STARS** has the highest number of missing values with `r sum(is.na(train[, c('STARS')]))` followed by **Sulphates** with `r sum(is.na(train[, c('Sulphates')]))` missing values. The following graph shows the percentage of missing data in each variables.
+
+```{r, message=F, warning=F, echo=FALSE}
+plot_missing(train)
+```
+
+In order to see the distribution and outliers of the variables we next we will plot histograms and boxplot for each of the variables.
+
+```{r, message=F, warning=F, echo=FALSE}
+plot_histogram(train)
+meltData <- melt(train)
+ggplot(meltData, aes(variable, value)) + 
+  facet_wrap(~variable,scales = "free") +
+  geom_boxplot()
+```
+
+From the histograms we can see most of the variables are fairly normally distributed and the boxplots indicates presence of outliers.
+
+**Correlation Plot of Variables**
+
+
+```{r, message=F, warning=F, echo=FALSE}
+plot_correlation(train[complete.cases(train),],)
+```
+
+The correlation plot shows only weak to moderate correlation between the variables.
+
+# Data Preparation
+
+
+In order to prepare the data for building models we will handle the missing values first. **STARS** has 26% of data missing and before handling the missing values in **STARS** let's look at the distribution of **TARGET** based on **STARS**:
+
+
+```{r, message=F, warning=F, echo=FALSE}
+train1 <- train
+train1$STARS[is.na(train1$STARS)] <- "NA"
+train1$STARS <- factor(train1$STARS)
+train2 <- aggregate( TARGET ~ STARS, train1, median )
+ggplot(train2, aes(x=STARS, y=TARGET)) +
+  ggtitle("Median Target Sales for STARS Rating") +
+  geom_bar(stat="identity",color="darkgreen", fill="lightgreen")
+```
+
+We can see if a wine in not rated by the team of experts sells poorly, which indicates missing **STAR** rating is, in fact, predictive of **TARGET**. So, we can conclude missing values in **STARS** do not require any replacement and we will simply replace the missing values with zero.
+
+```{r, message=F, warning=F, echo=FALSE}
+train$STARS[is.na(train$STARS)] <- 0
+test$STARS[is.na(test$STARS)] <- 0
+```
+
+For the missing values in all the other variables we imputed data using predictive mean matching approach from *mice* package in R.
+
+```{r, message=F, warning=F, echo=FALSE}
+train_mis <- train[,c("ResidualSugar","Chlorides","FreeSulfurDioxide","TotalSulfurDioxide","pH","Sulphates", "Alcohol")]
+train_imputed_tmp <- mice(data = train_mis, m = 1, method = "pmm", maxit = 50, seed = 500, print=FALSE)
+train_mis_imputed <- complete(train_imputed_tmp)
+train <- bind_cols(train %>% dplyr::select(-ResidualSugar, -Chlorides, -FreeSulfurDioxide, -TotalSulfurDioxide, -pH, -Sulphates, -Alcohol),train_mis_imputed)
+
+test_mis <- test[,c("ResidualSugar","Chlorides","FreeSulfurDioxide","TotalSulfurDioxide","pH","Sulphates", "Alcohol")]
+test_imputed_tmp <- mice(data = test_mis, m = 1, method = "pmm", maxit = 50, seed = 500, print=FALSE)
+test_mis_imputed <- complete(test_imputed_tmp)
+test <- bind_cols(test %>% dplyr::select(-ResidualSugar, -Chlorides, -FreeSulfurDioxide, -TotalSulfurDioxide, -pH, -Sulphates, -Alcohol),test_mis_imputed)
+```
+
+
+**Correlation Plot After Missing Data Handling**
+
+```{r, message=F, warning=F, echo=FALSE}
+plot_correlation(train)
+```
+
+
+# Build Models
+
+For our exercise we will build following six models:
+
+-	  Model 1: Poisson
+
+-	  Model 2: Poisson Reduced
+
+-	  Model 3: Negative Binomial
+
+-	  Model 4: Negative Binomial Reduced
+
+-	  Model 5: Backward Stepwise Multiple Linear Regression
+
+-	  Model 6: Zero Dispersion Counts
+
+Please follow the link provided in Appendix for R code for the models
+
+```{r, message=F, warning=F, echo=FALSE}
+#Poisson
+m1 <- glm(TARGET ~ . , data=train, family="poisson")
+#summary(m1)
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+#Poisson Reduced
+m2 <- glm(TARGET ~ VolatileAcidity + Chlorides + TotalSulfurDioxide + Sulphates + Alcohol + LabelAppeal + AcidIndex + STARS, data=train, family="poisson")
+#summary(nb2)
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+#Negative Binomial
+m3 <- glm.nb(TARGET ~ . , data=train)
+#summary(m3)
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+# Negative Binomial Reduced
+m4 <- glm.nb(TARGET ~ VolatileAcidity + Chlorides + TotalSulfurDioxide + Sulphates + Alcohol + LabelAppeal + AcidIndex + STARS, data=train)
+#summary(m4)
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+#Backward Stepwise Multiple Linear Regression
+m5 <- step(lm(TARGET ~ ., data = train), direction = "backward", trace = FALSE)
+#summary(m5)
+```
+
+```{r, message=F, warning=F, echo=FALSE}
+#Zero Dispersion Counts
+m6 <- zeroinfl(TARGET ~ . |STARS, data=train, dist="negbin")
+#summary(m6)
+```
+
+
+# Select Models
+```{r, message=F, warning=F, echo=FALSE}
+AIC <- format(c(AIC(m1), AIC(m2),AIC(m3), AIC(m4), AIC(m5), AIC(m6)))
+BIC <- format(c(BIC(m1), BIC(m2), BIC(m3), BIC(m4),  BIC(m5),  BIC(m6)))
+LogLik <- format(c(logLik(m1),logLik(m2), logLik(m3), logLik(m4), logLik(m5),logLik(m6)))
+Model <- c("Poisson", "Poisson Reduced", "Negative Binomial", "Negative Binomial Reduced", "Backward Stepwise Multiple Linear Regression", "Zero Dispersion Counts")
+kable(cbind(Model, AIC, BIC, LogLik))%>%
+  kable_styling(full_width = F) %>%
+  column_spec(3, width = "30em") 
+
+```
+
+Based on the numbers on the above table we will select model 6 or the *Zero Dispersion Counts* model to use for our model prediction.
+
+Summary of *Zero Dispersion Counts* model given below:
+
+```{r, message=F, warning=F, echo=FALSE}
+summary(m6)
+```
+
+
+# Make Prediction
+
+
+```{r, message=F, warning=F, echo=FALSE}
+preds <- predict(m6, test)
+predsdf <- cbind(TARGET=preds)
+write.csv(predsdf, 'HW5preds.csv', row.names = FALSE)
+```
+
+
+
